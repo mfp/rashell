@@ -30,6 +30,7 @@ depends: [
   "bsdowl"  {>= "3.0.0"}
   "lwt"     {>= "2.5.0"}
   "mixture" {>= "0.2.0"}
+  "lemonade" {>= "0.6.0"}
 ]
 depexts: [
   [["debian"] ["bmake"]]
