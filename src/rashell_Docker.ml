@@ -75,6 +75,8 @@ type command =
       privileged   : bool option;
       publish      : (int * int) list option;
       publish_gen  : (address option * ports option * ports) list option;
+      publish_udp  : (int * int) list option;
+      publish_udp_gen : (address option * ports option * ports) list option;
       restart      : restart_policy option;
       tty          : bool option;
       user         : user option;
@@ -187,6 +189,19 @@ let string_of_volume_option = function
   | Relabel -> ":z"
   | Relabel_Private -> ":Z"
 
+let string_of_publish_gen ~suffix (addr, host, container) =
+  let open Printf in
+  let string_of_ports = function
+    | Single p -> string_of_int p
+    | Range (l, h) -> sprintf "%d-%d" l h
+  in
+    [| sprintf "--publish=%s:%s:%s%s"
+         (match addr with Some s -> s | None -> "")
+         (match host with Some h -> string_of_ports h | None -> "")
+         (string_of_ports container)
+         suffix
+    |]
+
 let docker_args funcname cmd =
   let open Printf in
   maybe_concat [
@@ -212,16 +227,10 @@ let docker_args funcname cmd =
        (fun (host, container) -> [| sprintf "--publish=%d:%d" host container |])
        cmd.publish);
     (maybe_list
-       (fun (addr, host, container) ->
-          let string_of_ports = function
-            | Single p -> string_of_int p
-            | Range (l, h) -> sprintf "%d-%d" l h
-          in
-            [| sprintf "--publish=%s:%s:%s"
-                 (match addr with Some s -> s | None -> "")
-                 (match host with Some h -> string_of_ports h | None -> "")
-                 (string_of_ports container) |])
-       cmd.publish_gen);
+       (fun (host, container) -> [| sprintf "--publish=%d:%d/udp" host container |])
+       cmd.publish_udp);
+    (maybe_list (string_of_publish_gen ~suffix:"") cmd.publish_gen);
+    (maybe_list (string_of_publish_gen ~suffix:"/udp") cmd.publish_udp_gen);
     (maybe_map (fun flag -> [| sprintf "--tty=%b" flag |]) cmd.tty);
     (maybe_map
        (function
@@ -336,10 +345,13 @@ let start containers =
 let command
      ?add_host ?argv ?cap_add ?cap_drop ?device ?entrypoint ?env ?expose
      ?hostname ?labels ?link ?memory ?name ?net ?privileged
-     ?publish ?publish_gen ?restart ?tty
+     ?publish ?publish_gen
+     ?publish_udp ?publish_udp_gen
+     ?restart ?tty
      ?user ?volumes_from ?volumes image_id =
   {
     add_host; argv; cap_add; cap_drop; device; entrypoint; env; expose; hostname;
     image_id; labels; link; memory; name; net; privileged;
-    publish; publish_gen; restart; tty; user; volumes_from; volumes;
+    publish; publish_gen; publish_udp; publish_udp_gen;
+    restart; tty; user; volumes_from; volumes;
   }

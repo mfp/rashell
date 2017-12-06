@@ -104,6 +104,8 @@ type command =
       privileged   : bool option;
       publish      : (int * int) list option;
       publish_gen  : (address option * ports option * ports) list option;
+      publish_udp  : (int * int) list option;
+      publish_udp_gen : (address option * ports option * ports) list option;
       restart      : restart_policy option;
       tty          : bool option;
       user         : user option;
@@ -130,6 +132,8 @@ val command :
   ?privileged:bool ->
   ?publish:(int*int)list ->
   ?publish_gen:(address option * ports option * ports) list ->
+  ?publish_udp:(int*int)list ->
+  ?publish_udp_gen:(address option * ports option * ports) list ->
   ?restart:restart_policy ->
   ?tty:bool ->
   ?user:user ->
