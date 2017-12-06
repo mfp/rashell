@@ -19,6 +19,16 @@ open Lwt.Infix
 
 module Pool = Set.Make(String)
 
+let failwith fmt =
+  Printf.ksprintf
+    (fun mesg -> Pervasives.failwith(__MODULE__ ^": "^ mesg))
+    fmt
+
+let lwt_failwith fmt =
+  Printf.ksprintf
+    (fun mesg -> Lwt.fail_with(__MODULE__ ^": "^ mesg))
+    fmt
+
 type image_id     = string
 type container_id = string
 
@@ -65,6 +75,8 @@ type command =
       privileged   : bool option;
       publish      : (int * int) list option;
       publish_gen  : (address option * ports option * ports) list option;
+      publish_udp  : (int * int) list option;
+      publish_udp_gen : (address option * ports option * ports) list option;
       restart      : restart_policy option;
       tty          : bool option;
       user         : user option;
@@ -72,101 +84,10 @@ type command =
       volumes      : (volume_source * volume_mountpoint * volume_option list) list option;
     }
 
-let ps_keyword = [
-  "CONTAINER ID";
-  "IMAGE";
-  "COMMAND";
-  "CREATED";
-  "STATUS";
-  "PORTS";
-  "NAMES";
-]
-
-let image_keyword = [
-  "REPOSITORY";
-  "TAG";
-  "IMAGE ID";
-  "CREATED";
-  "\\(VIRTUAL \\)?SIZE";
-]
-
-let image_keyword_map =
-  [
-    "REPOSITORY",   "REPOSITORY";
-    "TAG",          "TAG";
-    "IMAGE ID",     "IMAGE ID";
-    "CREATED",      "CREATED";
-    "VIRTUAL SIZE", "SIZE";
-    "SIZE",         "SIZE";
-  ]
-
-type field = {
-  field_name: string;
-  field_position: int;
-  field_width: int option;
-}
-
 let error fmt =
-  Printf.ksprintf (fun s -> failwith("Rashell_Docker" ^": "^s)) fmt
-
-let field_make kwlist header =
-  let open Str in
-  let pat  = regexp ("\\(" ^ (String.concat "\\|" kwlist) ^ "\\)") in
-  let pat2 = regexp "\\( *\\)" in
-  let rec loop ax i =
-    match string_match pat header i, i = String.length header with
-    | false, false -> error "field_make: Protocol mismatch."
-    | false, true -> ax
-    | true, _ ->
-        let orig_name = matched_group 1 header in
-        let field_name =
-          try List.assoc orig_name image_keyword_map
-          with Not_found -> orig_name in
-        let _ = string_match pat2 header (i + String.length orig_name) in
-        let field = {
-          field_name;
-          field_position = i;
-          field_width =
-            if matched_group 1 header = "" then
-              None
-            else
-              Some (match_end () - 1 - i)
-        }
-        in
-        loop (field :: ax) (match_end())
-  in
-  loop [] 0
-
-let field_trim s =
-  let open Str in
-  global_replace (regexp "\\(^ *\\| *$\\)") "" s
-
-let field_get f s =
-  let get () =
-    match f.field_width with
-    | Some(k) -> String.sub s f.field_position k
-    | None -> String.sub s f.field_position
-                (String.length s - f.field_position)
-  in
-  try field_trim (get())
-  with _ -> error "field_extract: Protocol mismatch."
-
-let field_extract lst s =
-  List.map (fun f -> (f.field_name, field_get f s)) lst
-
-let to_alist name kwlist lst =
-  match lst with
-  | hd :: tl -> Lwt.return(
-      List.map (field_extract (field_make kwlist hd)) tl
-    )
-  | _ -> Lwt.fail_with("Rashell_Docker"^": "^name^": Protocol mismatch.")
+  Printf.ksprintf (fun s -> Pervasives.failwith("Rashell_Docker" ^": "^s)) fmt
 
 let tags () =
-  let triple_of_alist alist =
-    let get field = List.assoc field alist in
-    try (get "IMAGE ID", (get "REPOSITORY", get "TAG"))
-    with Not_found -> failwith("Rashell_Docker"^": images: Protocol mismatch.")
-  in
   let pack lst =
     let images =
       Pool.elements(List.fold_right Pool.add (List.map fst lst) Pool.empty)
@@ -175,22 +96,27 @@ let tags () =
       (fun x -> (x, List.map snd (List.filter (fun (k,_) -> k = x) lst)))
       images
   in
+  let unpack line =
+    Scanf.sscanf line "%[^|]|%[^|]|%[^|]"
+      (fun id repository tag -> (id, (repository, tag)))
+  in
   Lwt_stream.to_list
     (exec_query
-       (command ("", [| ac_path_docker; "images"; "--all=true"; "--no-trunc=true"; |])))
-  >>= to_alist "images" image_keyword
-  >>= Lwt.wrap1 (List.map triple_of_alist)
+       (command ("", [| ac_path_docker; "images";
+                        "--format"; "{{.ID}}|{{.Repository}}|{{.Tag}}";
+                        "--all=true";
+                        "--no-trunc=true"; |])))
+  >|= List.map unpack
   >|= List.filter
     (fun (_,(container, tag)) -> container <> "<none>" && tag <> "<none>")
   >|= pack
 
-let _inspect of_json lst =
+let _inspect resource of_json_string lst =
   let convert s =
-    try Lwt.return(of_json s)
+    try Lwt.return(of_json_string s)
     with Ag_oj_run.Error(mesg) | Yojson.Json_error(mesg) ->
       prerr_endline s;
-      Printf.ksprintf Lwt.fail_with "%s._inspect: %S: %s"
-        "Rashell_Docker" s mesg
+      lwt_failwith "%s: inspect: %S: %s" resource s mesg
   in
   if lst = [] then
     Lwt.return []
@@ -200,14 +126,14 @@ let _inspect of_json lst =
                                    (Array.of_list lst)))))
     >>= convert
 
-let _list resource of_json () =
+let _list resource of_json_string () =
   Lwt_stream.to_list
     (exec_query (command ("", [|
          ac_path_docker;
          resource;
          "--all=true";
          "--quiet=true"; |])))
-  >>= _inspect of_json
+  >>= _inspect resource of_json_string
 
 let ps =
   _list "ps" containers_of_string
@@ -263,6 +189,19 @@ let string_of_volume_option = function
   | Relabel -> ":z"
   | Relabel_Private -> ":Z"
 
+let string_of_publish_gen ~suffix (addr, host, container) =
+  let open Printf in
+  let string_of_ports = function
+    | Single p -> string_of_int p
+    | Range (l, h) -> sprintf "%d-%d" l h
+  in
+    [| sprintf "--publish=%s:%s:%s%s"
+         (match addr with Some s -> s | None -> "")
+         (match host with Some h -> string_of_ports h | None -> "")
+         (string_of_ports container)
+         suffix
+    |]
+
 let docker_args funcname cmd =
   let open Printf in
   maybe_concat [
@@ -288,16 +227,10 @@ let docker_args funcname cmd =
        (fun (host, container) -> [| sprintf "--publish=%d:%d" host container |])
        cmd.publish);
     (maybe_list
-       (fun (addr, host, container) ->
-          let string_of_ports = function
-            | Single p -> string_of_int p
-            | Range (l, h) -> sprintf "%d-%d" l h
-          in
-            [| sprintf "--publish=%s:%s:%s"
-                 (match addr with Some s -> s | None -> "")
-                 (match host with Some h -> string_of_ports h | None -> "")
-                 (string_of_ports container) |])
-       cmd.publish_gen);
+       (fun (host, container) -> [| sprintf "--publish=%d:%d/udp" host container |])
+       cmd.publish_udp);
+    (maybe_list (string_of_publish_gen ~suffix:"") cmd.publish_gen);
+    (maybe_list (string_of_publish_gen ~suffix:"/udp") cmd.publish_udp_gen);
     (maybe_map (fun flag -> [| sprintf "--tty=%b" flag |]) cmd.tty);
     (maybe_map
        (function
@@ -412,10 +345,13 @@ let start containers =
 let command
      ?add_host ?argv ?cap_add ?cap_drop ?device ?entrypoint ?env ?expose
      ?hostname ?labels ?link ?memory ?name ?net ?privileged
-     ?publish ?publish_gen ?restart ?tty
+     ?publish ?publish_gen
+     ?publish_udp ?publish_udp_gen
+     ?restart ?tty
      ?user ?volumes_from ?volumes image_id =
   {
     add_host; argv; cap_add; cap_drop; device; entrypoint; env; expose; hostname;
     image_id; labels; link; memory; name; net; privileged;
-    publish; publish_gen; restart; tty; user; volumes_from; volumes;
+    publish; publish_gen; publish_udp; publish_udp_gen;
+    restart; tty; user; volumes_from; volumes;
   }
