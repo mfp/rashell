@@ -107,6 +107,7 @@ type command =
       publish_udp  : (int * int) list option;
       publish_udp_gen : (address option * ports option * ports) list option;
       restart      : restart_policy option;
+      security_opt : string option;
       tty          : bool option;
       user         : user option;
       volumes_from : container_id list option;
@@ -135,6 +136,7 @@ val command :
   ?publish_udp:(int*int)list ->
   ?publish_udp_gen:(address option * ports option * ports) list ->
   ?restart:restart_policy ->
+  ?security_opt:string ->
   ?tty:bool ->
   ?user:user ->
   ?volumes_from:container_id list ->
