@@ -78,6 +78,7 @@ type command =
       publish_udp  : (int * int) list option;
       publish_udp_gen : (address option * ports option * ports) list option;
       restart      : restart_policy option;
+      security_opt : string option;
       tty          : bool option;
       user         : user option;
       volumes_from : container_id list option;
@@ -246,6 +247,7 @@ let docker_args funcname cmd =
          | Restart_On_failure(0) -> [| "--restart=on-failure" |]
          | Restart_On_failure(n) -> [| sprintf "--restart=on-failure:%d" n |])
        cmd.restart);
+    (maybe_map (fun opt -> [| sprintf "--security-opt=%s" opt |]) cmd.security_opt);
     (maybe_list
        (fun (src, dst, options) ->
 
@@ -347,11 +349,11 @@ let command
      ?hostname ?labels ?link ?memory ?name ?net ?privileged
      ?publish ?publish_gen
      ?publish_udp ?publish_udp_gen
-     ?restart ?tty
+     ?restart ?security_opt ?tty
      ?user ?volumes_from ?volumes image_id =
   {
     add_host; argv; cap_add; cap_drop; device; entrypoint; env; expose; hostname;
     image_id; labels; link; memory; name; net; privileged;
     publish; publish_gen; publish_udp; publish_udp_gen;
-    restart; tty; user; volumes_from; volumes;
+    restart; security_opt; tty; user; volumes_from; volumes;
   }
